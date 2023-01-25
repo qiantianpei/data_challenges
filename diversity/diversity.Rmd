@@ -1,0 +1,357 @@
+---
+title: "Diversity"
+author: "Tianpei Qian"
+date: "2023-01-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+### Step 1: read data 
+
+You may use the read_lines function to peek the files.
+```{r}
+company_hierarchy_file <- 'company_hierarchy.csv'
+employee_file <- 'employee.csv'
+
+company_hierarchy <- 
+  read_csv(
+    company_hierarchy_file,
+    col_types = list(col_integer(), col_integer(), col_character()) 
+  )
+```
+
+```{r}
+employee <- 
+  read_csv(
+    employee_file,
+    col_types = 
+      list(
+        col_integer(), 
+        col_integer(), 
+        col_double(), 
+        col_character(), 
+        col_character(),
+        col_double()
+      ) 
+  )
+```
+
+
+### Step 2: data cleaning
+
+Join tables, process factors, etc.
+```{r}
+employee_combined <- 
+  employee %>% 
+  inner_join(company_hierarchy, by = c("employee_id" = "employee_id")) %>% 
+  mutate(
+    sex = factor(sex, levels = c("M", "F")),
+    degree_level = factor(degree_level, levels = c("High_School","Bachelor","Master","PhD")),
+    dept = factor(dept, levels = c("engineering","HR","marketing","sales", "CEO"))
+  )
+```
+
+### Step 3: simple exploratory analysis
+
+Mainly check on 1-dimensional data. Look out for outliers/missing values.
+
+```{r}
+employee_combined %>% 
+  summary()
+```
+First, CEO is a special department with only 1 data point. It probably also contributes the only missing data for boss_id.
+```{r}
+employee_combined %>% 
+  filter(dept == 'CEO')
+```
+We may or may not remove this CEO data point. It won't cause a big problem if we keep it and handle it with care.
+
+It looks like years of experience may have outliers.
+
+```{r}
+employee_combined %>% 
+  ggplot(aes(yrs_experience)) +
+  geom_boxplot()
+```
+
+Most employees have fewer than 10 years of expereince in the company.
+
+### Step 4: data transformation
+
+Now that we're familiar with the data, let's derive some additional variables. Specifically, let's figure out the level of each employee and how many people they manage.
+
+```{r}
+rank_levels <- c("IC", "MM", "D", "VP", "E", "CEO")
+```
+
+The following is in fact a wrong approach. It assumes that the tree is complete while there is a director that doesn't manage anyone!
+```{r eval = FALSE}
+employee_ranks_processed <- 
+  employee_combined %>% 
+  left_join(employee_combined, by = c("employee_id" = "boss_id"), suffix = c("", "_sub")) %>% 
+  filter(is.na(employee_id_sub)) %>% 
+  summarize(x = unique(employee_id)) %>% count()
+  
+  summary()
+  
+  transmute(
+    employee_id,
+    boss_id,
+    num_reports = 0,
+    rank = factor("IC", levels = rank_levels)
+  )
+
+employee_ranks <- employee_ranks_processed
+
+for (rank_level in rank_levels[2:length(rank_levels)]) {
+  employee_ranks_processed <- 
+    employee_combined %>% 
+    inner_join(
+      employee_ranks_processed, by = c("employee_id" = "boss_id"), suffix = c("", "_sub")
+    ) %>% 
+    group_by(employee_id) %>% 
+    summarize(
+      boss_id = max(boss_id),
+      num_reports = sum(num_reports) + n()
+    ) %>% 
+    mutate(
+      rank = factor(rank_level, levels = rank_levels)
+    )
+  employee_ranks <- employee_ranks %>% rbind(employee_ranks_processed)
+}
+```
+
+
+To get the rank, we have to start from the root of the tree, i.e. CEO.
+
+```{r}
+employee_ranks <- 
+  employee_combined %>% 
+  mutate(
+    rank = if_else(is.na(boss_id), "CEO", "to be updated")
+  )
+
+for (i in 1:(length(rank_levels) - 1)) {
+  employee_ranks <- 
+    employee_ranks %>% 
+    left_join(
+      employee_ranks, 
+      by = c("boss_id" = "employee_id"), 
+      suffix = c("", "_boss")
+    ) %>% 
+    mutate(
+      rank = 
+        if_else(
+          rank_boss == rank_levels[length(rank_levels) - i + 1], 
+          rank_levels[length(rank_levels) - i], 
+          rank,
+          rank # be careful! rank_boss can be null
+        )
+    ) %>% 
+    select_at(vars(-contains("_boss")))
+}
+```
+
+Next we need to start from the leaf of the tree to get the number of reports for each employee.
+
+```{r}
+employee_reports <- 
+  employee_ranks %>% 
+  filter(rank == rank_levels[1]) %>% 
+  transmute(
+    employee_id,
+    boss_id,
+    num_reports = 0
+  )
+
+for (rank_level in rank_levels[-1]) {
+  employee_reports <- 
+    employee_ranks %>% 
+    filter(rank == rank_level) %>% 
+    left_join(employee_reports, by = c("employee_id" = "boss_id"), suffix = c("", "_sub")) %>% 
+    group_by(employee_id, boss_id) %>% 
+    summarize(
+      num_reports = sum(num_reports) + n(),
+      # suffix only comes into play when there's duplicate!!
+      .groups = "drop"
+    ) %>% 
+    mutate(num_reports = if_else(is.na(num_reports), 0, num_reports)) %>% 
+    rbind(employee_reports)
+}
+```
+
+Combine everything and take a final look
+```{r}
+employee_final <- 
+  employee_ranks %>% 
+  inner_join(employee_reports, by = c("employee_id" = "employee_id", "boss_id" = "boss_id")) %>% 
+  filter(rank != "CEO") %>% 
+  mutate(rank = factor(rank, levels = rank_levels))
+
+employee_final %>% summary()
+```
+
+Another approach is to use recursion, which is capcable of traversing the tree top-down and bottom-up at one go.
+```{r eval = FALSE}
+employee_combined_re <- 
+  employee_combined %>% 
+  mutate(
+    boss_id = if_else(is.na(boss_id), -1L, boss_id),
+    rank = as.character(NA),
+    num_reports = as.integer(NA)
+  )
+
+find_rank <- function(rank_idx, id) {
+  employee_combined_re$rank[employee_combined_re$employee_id == id] <<- rank_levels[rank_idx]
+    
+  if (rank_idx == 1) {
+    employee_combined_re$num_reports[employee_combined_re$employee_id == id] <<- 0
+    return(0)
+  }
+  
+  ct <- 0
+  for (id_sub in employee_combined_re$employee_id[employee_combined_re$boss_id == id] ) {
+    ct <- ct + find_rank(rank_idx - 1, id_sub) + 1
+  }
+  employee_combined_re$num_reports[employee_combined_re$employee_id == id] <<- ct
+  return(ct)
+}
+
+find_rank(
+  length(rank_levels), 
+  employee_combined_re %>% filter(boss_id == -1) %>% pull(employee_id)
+)
+```
+
+
+
+### Step 4: modeling
+
+Now we're finally ready to answer the million dollar question: do you think the company has been treating all its employees fairly?
+
+We will build different models to answer the question from different perspectives. 
+
+#### Sign on bonus
+Is sign on bonus given out fairly?
+
+Note that in answering this question we shouldn't include more variables than needed!! This is a common pitfall that people new to modelling can fall into. For example, gender may affect the level the person gets and the level can subsequently decide whether the person gets sign on bonus. If you include "level" in your model when studying the impact of gender, then you will get an inaccurate estimate.
+
+```{r}
+employee_final %>% 
+  group_by(dept, degree_level, sex) %>% 
+  summarize(
+    bonus_rate = sum(signing_bonus) / n()
+  ) %>% 
+  ggplot(aes(dept, bonus_rate)) +
+  geom_line(aes(color = degree_level, group = degree_level)) +
+  facet_grid(vars(sex))
+```
+
+A quick plot shows that bonus rate seems irrelevant to sex and degree level but seems to be lower in the HR department. There is no obvious interaction pattern between these variables. 
+
+```{r}
+bonus_lm <- 
+  glm(
+    signing_bonus ~ degree_level + sex + dept, 
+    data = employee_final, 
+    family = 'binomial'
+  )
+```
+
+```{r}
+bonus_lm %>% summary()
+```
+Indeed, each department has significantly different bonus rates, with the HR department being the lowest and the engineering department being the highest.
+
+
+#### Department
+Does each department have the same criteria for hiring?
+
+```{r}
+employee_final %>% 
+  group_by(dept, degree_level) %>% 
+  summarize(
+    female_rate = sum(sex == 'F') / n()
+  ) %>% 
+  ggplot(aes(dept, female_rate)) +
+  geom_line(aes(color = degree_level, group = degree_level))
+```
+The HR department clearly hires more females than males while the other 3 departments hire more males.
+
+A chi-square test confirms that each department has significantly different gender distributions.
+
+```{r}
+employee_final %>% 
+  count(sex, dept) %>% 
+  pivot_wider(names_from = sex, values_from = n) %>% 
+  select(-dept) %>% 
+  chisq.test()
+```
+
+```{r}
+employee_final %>% 
+  group_by(dept, sex) %>% 
+  summarize(
+    high_school = sum(degree_level == 'High_School') / n(),
+    bachelor = sum(degree_level == 'Bachelor') / n(),
+    master = sum(degree_level == 'Master') / n(),
+    phd = sum(degree_level == 'PhD') / n()
+  ) %>% 
+  pivot_longer(cols = high_school:phd, names_to = "degree", values_to = "rate") %>% 
+  ggplot() +
+  geom_line(aes(dept, rate, color = degree, group = degree)) +
+  facet_grid(cols = vars(sex))
+```
+On the other hand, all departments seem to have very similar hiring standards for degree levels.
+
+
+#### Company level
+
+Does female have a fair representation on the managing levels?
+
+```{r}
+employee_final %>% 
+  group_by(rank) %>% 
+  summarize(
+    female_rate = sum(sex == "F") / n()
+  ) %>% 
+  ggplot(aes(rank, female_rate)) +
+  geom_col()
+```
+
+Firstly, the company has fewer females across all levels and female representation seems to get worse as the level increases.
+
+```{r}
+manager_lm <- 
+  glm(
+    is_manager ~ degree_level + sex + dept + yrs_experience, 
+    data = employee_final %>% mutate(is_manager = (rank != "IC")), 
+    family = 'binomial'
+  )
+```
+
+```{r}
+manager_lm %>% summary()
+```
+
+Not surprisingly, you have roughly equal opportunities to become managers in all departments. Also, higher degrees and more years of experience increase the odds. Lastly and notably, females are less likely to become managers in this company!
+
+#### Salary
+
+```{r}
+salary_lm <- 
+  lm(
+    salary ~ degree_level + sex + dept + yrs_experience + rank + num_reports, 
+    data = employee_final
+  )
+```
+
+```{r}
+salary_lm %>% summary()
+```
+The department and company level matters for salary, while degree level, sex, years of experience and number of reports do not have a significant impact on salary for a given department and company level.
+
