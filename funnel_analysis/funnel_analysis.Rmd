@@ -1,0 +1,149 @@
+---
+title: "Funnel analysis"
+author: "Tianpei Qian"
+date: "2023-01-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+
+### Step 1: read data 
+
+You may use the read_lines function to peek the files.
+```{r}
+user_table_file <- 'user_table.csv'
+home_page_file <- 'home_page_table.csv'
+search_page_file <- 'search_page_table.csv'
+payment_page_file <- 'payment_page_table.csv'
+payment_confirmation_file <- 'payment_confirmation_table.csv'
+
+user <- 
+  read_csv(
+    user_table_file,
+    col_types = list(col_integer(), col_date(), col_character(), col_character()) 
+  )
+
+home_page <- 
+  read_csv(
+    home_page_file,
+    col_types = list(col_integer(), col_character()) 
+  )
+
+search_page <- 
+  read_csv(
+    search_page_file,
+    col_types = list(col_integer(), col_character()) 
+  )
+
+payment_page <- 
+  read_csv(
+    payment_page_file,
+    col_types = list(col_integer(), col_character()) 
+  )
+
+confirmation_page <- 
+  read_csv(
+    payment_confirmation_file,
+    col_types = list(col_integer(), col_character()) 
+  )
+```
+
+
+### Step 2: data cleaning
+
+Join tables, process factors, etc.
+
+```{r}
+funnel <- 
+  user %>% 
+  mutate(
+    device = factor(device, levels = c("Desktop", "Mobile")),
+    sex = factor(sex, levels = c("Male", "Female"))
+  ) %>% 
+  left_join(home_page, by = "user_id") %>% 
+  mutate(home_page_flag = !is.na(page)) %>% 
+  select(-page) %>%
+  left_join(search_page, by = "user_id") %>% 
+  mutate(search_page_flag = !is.na(page)) %>% 
+  select(-page) %>%
+  left_join(payment_page, by = "user_id") %>% 
+  mutate(payment_page_flag = !is.na(page)) %>% 
+  select(-page) %>%
+  left_join(confirmation_page, by = "user_id") %>% 
+  mutate(confirmation_page_flag = !is.na(page)) %>% 
+  select(-page)
+```
+
+### Step 3: exploratory analysis
+
+```{r}
+funnel %>% 
+  filter(
+    search_page_flag > home_page_flag | 
+    payment_page_flag > search_page_flag | 
+    confirmation_page_flag > payment_page_flag
+  )
+```
+
+```{r}
+funnel %>% 
+  summarize(
+    n = n(),
+    overall = sum(confirmation_page_flag) / sum(home_page_flag),
+    home_search = sum(search_page_flag) / sum(home_page_flag),
+    search_payment = sum(payment_page_flag) / sum(search_page_flag),
+    payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
+  )
+```
+
+```{r}
+funnel %>% 
+  group_by(date) %>% 
+  summarize(
+    n = n(),
+    overall = sum(confirmation_page_flag) / sum(home_page_flag),
+    home_search = sum(search_page_flag) / sum(home_page_flag),
+    search_payment = sum(payment_page_flag) / sum(search_page_flag),
+    payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
+  ) %>% 
+  pivot_longer(overall:payment_confirmation, names_to = "rate", values_to = "val") %>% 
+  ggplot(aes(date, val)) +
+  geom_line(aes(color = rate))
+```
+There is an obvious drop in funnel conversion starting from March.
+```{r}
+funnel %>% 
+  group_by(date, device, sex) %>% 
+  summarize(
+    n = n(),
+    overall = sum(confirmation_page_flag) / sum(home_page_flag),
+    home_search = sum(search_page_flag) / sum(home_page_flag),
+    search_payment = sum(payment_page_flag) / sum(search_page_flag),
+    payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
+  ) %>% 
+  pivot_longer(overall:payment_confirmation, names_to = "rate", values_to = "val") %>% 
+  ggplot(aes(date, val)) +
+  geom_line(aes(color = rate)) +
+  facet_grid(sex ~ device)
+```
+
+The search page on mobile starts to have some problems since March while the payment page on web starts to experience some issues since March. Gender doesn't seem to matter much.
+
+```{r}
+funnel %>% 
+  filter(date < ymd('2015-03-01')) %>% 
+  group_by(device) %>% 
+  summarize(
+    n = n(),
+    overall = sum(confirmation_page_flag) / sum(home_page_flag),
+    home_search = sum(search_page_flag) / sum(home_page_flag),
+    search_payment = sum(payment_page_flag) / sum(search_page_flag),
+    payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
+  )
+```
+Before the problem occurs, the biggest drop off occurs from payment to confirmation, followed by search to payment. They both have big room for improvement. Mobile performs much better than desktop but attracts fewer customers. The difference could be attributed to either (1) different user groups from different marketing strategies (2) different products
+
