@@ -2,7 +2,9 @@
 title: "Diversity"
 author: "Tianpei Qian"
 date: "2023-01-18"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -10,9 +12,18 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 ```
 
+### TL;DR
+
+- Sign on bonus is given out equally across gender and degree level but very differently across departments. HR department has the lowest bonus rate while the engineering department has the highest.
+
+- The HR department hire much more females than males while we observe the opposite in all the other departments.
+
+- A female is less likely to be on the managing level compared with a male in the sample department, with the same degree level and same years of experience! The problem seems to even get worse at higher levels.
+
+- Salary-wise, the engineering department has the highest salary while the HR department has the lowest. We don't see gender inequality in salary.
+
 ### Step 1: read data 
 
-You may use the read_lines function to peek the files.
 ```{r}
 company_hierarchy_file <- 'company_hierarchy.csv'
 employee_file <- 'employee.csv'
@@ -55,7 +66,7 @@ employee_combined <-
   )
 ```
 
-### Step 3: simple exploratory analysis
+### Step 3: quick check
 
 Mainly check on 1-dimensional data. Look out for outliers/missing values.
 
@@ -63,11 +74,14 @@ Mainly check on 1-dimensional data. Look out for outliers/missing values.
 employee_combined %>% 
   summary()
 ```
+
 First, CEO is a special department with only 1 data point. It probably also contributes the only missing data for boss_id.
+
 ```{r}
 employee_combined %>% 
   filter(dept == 'CEO')
 ```
+
 We may or may not remove this CEO data point. It won't cause a big problem if we keep it and handle it with care.
 
 It looks like years of experience may have outliers.
@@ -227,16 +241,13 @@ find_rank(
 
 
 
-### Step 4: modeling
+### Step 4: exploratory analysis
 
 Now we're finally ready to answer the million dollar question: do you think the company has been treating all its employees fairly?
 
-We will build different models to answer the question from different perspectives. 
 
 #### Sign on bonus
 Is sign on bonus given out fairly?
-
-Note that in answering this question we shouldn't include more variables than needed!! This is a common pitfall that people new to modelling can fall into. For example, gender may affect the level the person gets and the level can subsequently decide whether the person gets sign on bonus. If you include "level" in your model when studying the impact of gender, then you will get an inaccurate estimate.
 
 ```{r}
 employee_final %>% 
@@ -249,7 +260,7 @@ employee_final %>%
   facet_grid(vars(sex))
 ```
 
-A quick plot shows that bonus rate seems irrelevant to sex and degree level but seems to be lower in the HR department. There is no obvious interaction pattern between these variables. 
+A quick plot shows that sex and degree level seems irrelevant to bonus rate but it seems to be lower in the HR department. There is no obvious interaction pattern between these variables. 
 
 ```{r}
 bonus_lm <- 
@@ -263,10 +274,15 @@ bonus_lm <-
 ```{r}
 bonus_lm %>% summary()
 ```
-Indeed, each department has significantly different bonus rates, with the HR department being the lowest and the engineering department being the highest.
+
+Indeed, department has a significant impact on bonus rates, with the HR department being the lowest and the engineering department being the highest.
+
+
+Note that in answering this question we shouldn't consider more variables than needed!! This is a common pitfall that people new to modelling can fall into. For example, gender may affect the level the person gets and the level can subsequently decide whether the person gets sign on bonus. If you include "level" in your model when studying the impact of gender, then you will get an inaccurate estimate because you limit the impact of gender on level.
 
 
 #### Department
+
 Does each department have the same criteria for hiring?
 
 ```{r}
@@ -278,7 +294,8 @@ employee_final %>%
   ggplot(aes(dept, female_rate)) +
   geom_line(aes(color = degree_level, group = degree_level))
 ```
-The HR department clearly hires more females than males while the other 3 departments hire more males.
+
+The HR department hires more females than males while the other 3 departments hire more males.
 
 A chi-square test confirms that each department has significantly different gender distributions.
 
@@ -299,12 +316,12 @@ employee_final %>%
     master = sum(degree_level == 'Master') / n(),
     phd = sum(degree_level == 'PhD') / n()
   ) %>% 
-  pivot_longer(cols = high_school:phd, names_to = "degree", values_to = "rate") %>% 
+  pivot_longer(cols = high_school:phd, names_to = "degree", values_to = "prop") %>% 
   ggplot() +
-  geom_line(aes(dept, rate, color = degree, group = degree)) +
+  geom_line(aes(dept, prop, color = degree, group = degree)) +
   facet_grid(cols = vars(sex))
 ```
-On the other hand, all departments seem to have very similar hiring standards for degree levels.
+On the other hand, all departments seem to have very similar hiring standards on degree levels.
 
 
 #### Company level
@@ -323,6 +340,8 @@ employee_final %>%
 
 Firstly, the company has fewer females across all levels and female representation seems to get worse as the level increases.
 
+To get a more rigorous analysis, let's build a model that also controls department, degree level and years of experience.
+
 ```{r}
 manager_lm <- 
   glm(
@@ -336,14 +355,27 @@ manager_lm <-
 manager_lm %>% summary()
 ```
 
-Not surprisingly, you have roughly equal opportunities to become managers in all departments. Also, higher degrees and more years of experience increase the odds. Lastly and notably, females are less likely to become managers in this company!
+Not surprisingly, you have roughly equal opportunities to become managers in all departments. Also, higher degrees and more years of experience increase the odds. Lastly and notably, females are less likely to become managers in this company even when they're in the same department, have the same degree level and have the same years of experience!
 
 #### Salary
+
+Finally, do we see inequality in salary?
+
+```{r}
+employee_final %>% 
+  group_by(dept, rank, sex) %>% 
+  summarize(salary = mean(salary)) %>% 
+  ggplot(aes(dept, salary)) +
+  geom_point(aes(color = rank, group = rank)) +
+  geom_line(aes(color = rank, group = rank)) +
+  facet_grid(cols = vars(sex))
+```
+
 
 ```{r}
 salary_lm <- 
   lm(
-    salary ~ degree_level + sex + dept + yrs_experience + rank + num_reports, 
+    salary ~ degree_level + sex + rank + dept  + yrs_experience + num_reports, 
     data = employee_final
   )
 ```
@@ -351,5 +383,6 @@ salary_lm <-
 ```{r}
 salary_lm %>% summary()
 ```
+
 The department and company level matters for salary, while degree level, sex, years of experience and number of reports do not have a significant impact on salary for a given department and company level.
 
