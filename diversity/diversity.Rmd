@@ -94,9 +94,7 @@ employee_ranks_processed <-
   employee_combined %>% 
   left_join(employee_combined, by = c("employee_id" = "boss_id"), suffix = c("", "_sub")) %>% 
   filter(is.na(employee_id_sub)) %>% 
-  summarize(x = unique(employee_id)) %>% count()
-  
-  summary()
+
   
   transmute(
     employee_id,

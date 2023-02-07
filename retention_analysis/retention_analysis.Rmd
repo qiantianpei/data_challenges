@@ -1,0 +1,268 @@
+---
+title: "Retention analysis"
+author: "Tianpei Qian"
+date: "2023-02-07"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(modelr)
+```
+
+### Step 1: read data 
+
+```{r}
+subscription_file <- 'subscription.csv'
+read_lines(subscription_file, n_max = 5)
+```
+
+```{r}
+subscription_raw <- 
+  read_csv(
+    subscription_file,
+    col_types = 
+      list(
+        col_integer(), 
+        col_character(), 
+        col_integer(), 
+        col_character(), 
+        col_character(), 
+        col_integer(),
+        col_logical()
+      ) 
+  )
+```
+
+
+### Step 2: data cleaning
+
+Join tables, process factors, etc.
+
+
+```{r}
+subscription <-
+  subscription_raw %>%
+  mutate(
+    sku = factor(subscription_monthly_cost, levels = c(29, 49, 99)),
+    country = factor(country, levels = unique(country)),
+    source = factor(source, levels = c("ads", "friend_referral", "seo"))
+  ) %>% 
+  select(-subscription_monthly_cost)
+```
+
+
+```{r eval = FALSE, include = FALSE}
+for (n in 1:7) {
+  subscription <- 
+    subscription %>% 
+    mutate(!!sym(paste0("month_", n)) := billing_cycles > n)
+}
+
+subscription <- 
+  subscription %>% 
+  pivot_longer(cols = month_1:month_7, names_to = "cycle", values_to = "retention") %>%
+  mutate(cycle = cycle %>% str_sub(7, 7) %>% as.integer())
+```
+
+
+### Step 3: exploratory analysis
+
+```{r}
+subscription %>% summary()
+```
+#### Customer distribution
+
+Firstly, let's understand how our customers are distributed by country, by sku and by source.
+
+```{r}
+subscription %>% 
+  group_by(country, source) %>% 
+  summarise(
+    n = n()
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    country = fct_reorder(country, -n),
+    source = fct_reorder2(source, country, n)
+  ) %>% 
+  ggplot(aes(country, n)) +
+  geom_line(aes(color = source, group = source))
+```
+
+Most of our customers come come ads. US, UK and Germany and the Top 3 countries our product sell to. 
+
+Insights: Since there are great product oppotunities in the remaining countries, especially China and India given the large population base, it would be interesting to understand whether this is a marketing problem (not enough publicity ) or a product problem (e.g. bad localization, better alternatives, etc.)
+
+
+```{r}
+subscription %>% 
+  group_by(country, sku) %>% 
+  summarise(
+    n = n()
+  ) %>% 
+  mutate(
+    prop = n / sum(n)
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    country = fct_reorder(country, -prop),
+    sku = fct_reorder2(sku, country, prop)
+  ) %>% 
+  ggplot(aes(country, prop)) +
+  geom_line(aes(color = sku, group = sku))
+```
+
+Overall, the \$49/month product is the most popular across all countries. However, Chinese and Indian customers are much more likely to purphase the \$29/month product.
+
+Insights: There are 2 explanations for the China and India data points. Firstly, it's possible that the \$29 product already satisfies the needs of most customers in the 2 countries. It would then be interesting to explore breaking the \$29 into more SKUs so that we can attract more customers with a finer SKU lineup. Secondly, our product is overpriced in China and India. The low absolute number of customers from the 2 countries also support this hypothesis. We may be able to get more customers by adjusting down the price levels. Hopefully the larger customer base and better customer retention can lead to more revenue in the end. It is not possible to have regional pricing, then we may also consider sending out coupons to customers in China and India.
+
+```{r}
+subscription %>% 
+  group_by(source, sku) %>% 
+  summarise(n = n()) %>% 
+  mutate(prop = n / sum(n)) %>% 
+  ungroup() %>% 
+  mutate(sku = fct_reorder(sku, -prop) ) %>%
+  ggplot(aes(source, prop)) +
+  geom_line(aes(color = sku, group = sku))
+```
+
+The relationpship between source and SKU is not very interesting. Customers from the 3 sources have the same distributions across the 3 SKUs. 
+
+
+#### Customer retention
+
+Let's look at both short-term retention (1-month retention) and long-term retention (7-month retention) They are both important because short-term retention tells us how fast we can make the product value clear to the customers while long-term retention tells us whether we can consistently and constantly deliver the value to the customers.
+
+```{r}
+short_term_retention <- 
+  subscription %>% 
+  group_by(sku, country, source) %>% 
+  summarize(
+    n = n(),
+    retention = sum(billing_cycles > 1) / n()
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    country = country %>% fct_reorder(retention),
+    source = source %>% fct_reorder2(country, retention)
+  )
+
+
+short_term_retention %>% 
+  ggplot(aes(country, retention)) +
+  geom_line(aes(color = source, group = source)) +
+  scale_y_continuous(breaks = seq(0, 0.8, 0.2), limits = c(0, 0.9)) +
+  facet_grid(rows = vars(sku))
+```
+
+```{r}
+long_term_retention <- 
+  subscription %>% 
+  group_by(sku, country, source) %>% 
+  summarize(
+    n = n(),
+    retention = sum(billing_cycles > 7) / n()
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    country = factor(country, levels = short_term_retention$country %>% levels()),
+    source = source %>% fct_reorder2(country, retention)
+  )
+
+
+long_term_retention %>% 
+  ggplot(aes(country, retention)) +
+  geom_line(aes(color = source, group = source)) +
+  scale_y_continuous(breaks = seq(0, 0.8, 0.2)) +
+  facet_grid(rows = vars(sku))
+```
+
+There are multiple insights from the 2 graphs
+
+- Friend referral acquires the most committed customers. On the other hand, it is also the smallest channel according to our previous analysis. This suggests we should encourage more users to refer their friends by providing incentives like coupons. 
+
+- The \$29 product has the most committed customers in China and India. Note that the product is also relatively more popular in the 2 countries than others. In particular, they start with high short-term retention and end with very little drop in long-term retention. There's almost no drop for friend referral. We need to understand the success and see if it can be replicated in other countries.
+
+- The long-term retention for the \$49 and \$99 product is way too low, especially for customers from ads and seo. We still have moderate number of customers remaining after the first month, which indicates we do attract customers with some intentsion. Nonetheless, almost no customers from ads and seo remain after 7 months. It is very likely that we have some serious product problems. 
+
+
+Note: We may also approach this analysis with modelling, but it can easily get over-complicated with the interaction effects and all the categorical variables (it is important to pick the right base levels). 
+
+Lastly, let's work on predicting 1-year customer retention for each SKU. The ideal method is to find a linear relationship between cycle and retention and then fit a linear regression model.
+
+```{r}
+retention <- 
+  subscription %>% 
+  group_by(sku, billing_cycles) %>% 
+  summarize(
+    n = n()
+  ) %>% 
+  arrange(billing_cycles) %>% 
+  mutate(
+    retention = 1 - cumsum(n) / sum(n),
+    cycle = billing_cycles
+  ) %>% 
+  ungroup() %>% 
+  filter(cycle < 8)
+```
+
+Note that we may also calculate retention for each cycle in other ways. For example, instead of looking at retention of all customers, we may also look at retention of customers that retain from the last cycle. It is harder to get a linear relationship from this definition so we do not proceed with it.
+
+```{r}
+retention %>% 
+  ggplot() + 
+  geom_line(aes(cycle, retention, color = sku))
+```
+
+The relationship is obviously non-linear. It is tempting to consider polynomial regression but it can be very dangerous! 
+
+```{r}
+retention %>% 
+  transmute(sku, cycle, retention) %>% 
+  rbind(data.frame(sku = "29", cycle = 7:12, retention = NA_real_)) %>% 
+  rbind(data.frame(sku = "49", cycle = 7:12, retention = NA_real_)) %>% 
+  rbind(data.frame(sku = "99", cycle = 7:12, retention = NA_real_)) %>% 
+  add_predictions(
+    lm(retention ~ poly(cycle, 3) * sku, data = retention)
+  ) %>% 
+  rename(actual = retention) %>% 
+  pivot_longer(actual:pred, names_to = "type", values_to = "val") %>% 
+  ggplot() +
+  geom_vline(xintercept = 7, color = "white", size = 2) +
+  geom_line(aes(cycle, val, color = sku, linetype = type)) +
+  scale_x_continuous(breaks = seq(1, 12, 1), minor_breaks = NULL)
+```
+
+In our example, although the polynomial fits almost perfectly with our data, the prediction goes wild and nonsensical.
+
+A better approach is to try different transformations for x and y and see if we can get a linear relationship. For this data, it turns that we only need to take the reciprocal of retnetion and we get a fairly linear relationship.
+
+
+```{r}
+retention %>% 
+  ggplot(aes(cycle, 1 / retention)) +
+  geom_line(aes(color = sku))
+```
+```{r}
+retention %>% 
+  transmute(sku, cycle, retention) %>% 
+  rbind(data.frame(sku = "29", cycle = 7:12, retention = NA_real_)) %>% 
+  rbind(data.frame(sku = "49", cycle = 7:12, retention = NA_real_)) %>% 
+  rbind(data.frame(sku = "99", cycle = 7:12, retention = NA_real_)) %>% 
+  add_predictions(
+    lm(1 / retention ~ cycle * sku, data = retention)
+  ) %>% 
+  mutate(pred = 1 / pred) %>% 
+  rename(actual = retention) %>% 
+  pivot_longer(actual:pred, names_to = "type", values_to = "val") %>% 
+  ggplot() +
+  geom_vline(xintercept = 7, color = "white", size = 2) +
+  geom_line(aes(cycle, val, color = sku, linetype = type)) +
+  scale_x_continuous(breaks = seq(1, 12, 1), minor_breaks = NULL)
+```
+Both the fitting and prediction look reasonable with this approach so we should feel confident about the results from this model.
