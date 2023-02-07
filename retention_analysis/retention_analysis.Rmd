@@ -13,6 +13,17 @@ library(tidyverse)
 library(modelr)
 ```
 
+### TL;DR
+
+- US, UK and Germany are the Top 3 countries our product sell to while there are great opportunities in China and India.
+
+- Friend referral is much more effective in acquiring committed customers than ads and seo. We should encourage customers to refer their friends. 
+
+- The \$29/month product has great retention in China and India. We should have a deep dive to understand why and see if it can be replicated in other countries. On the other hand, the \$99/month product might have some serious problems given the very low long-term retention
+
+- We build a model to predict long-term retention from short-term retention.
+
+
 ### Step 1: read data 
 
 ```{r}
@@ -93,7 +104,7 @@ subscription %>%
   geom_line(aes(color = source, group = source))
 ```
 
-Most of our customers come come ads. US, UK and Germany and the Top 3 countries our product sell to. 
+Most of our customers come come ads. US, UK and Germany are the Top 3 countries our product sell to. 
 
 Insights: Since there are great product oppotunities in the remaining countries, especially China and India given the large population base, it would be interesting to understand whether this is a marketing problem (not enough publicity ) or a product problem (e.g. bad localization, better alternatives, etc.)
 
