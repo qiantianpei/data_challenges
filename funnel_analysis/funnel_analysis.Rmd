@@ -2,7 +2,9 @@
 title: "Funnel analysis"
 author: "Tianpei Qian"
 date: "2023-01-18"
-output: html_document
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
@@ -10,6 +12,15 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(lubridate)
 ```
+
+### TL;DR
+
+- There is a bug or a bad product change starting from March that affects the search page on mobile and the payment page on web.
+
+- Mobile has much higher conversion rate but fewer customers than web. We need to understand whether it is a marketing problem or a product problem. If it is a marketing problem (i.e. mobile attracts customers with higher intentions to buy), then we should try to find more such customers. If it is a product problem (i.e. mobile experience is better than web), then we need to improve the web version.
+
+- The drop-off rate from search to payment and payment to confirmation seems very low. We probably have a bad search engine, a poor product catalog, a substandard product page or an inconvenient payment system. We need to do a deep dive to understand the exact reasons.
+
 
 ### Step 1: read data 
 
@@ -82,15 +93,6 @@ funnel <-
 
 ```{r}
 funnel %>% 
-  filter(
-    search_page_flag > home_page_flag | 
-    payment_page_flag > search_page_flag | 
-    confirmation_page_flag > payment_page_flag
-  )
-```
-
-```{r}
-funnel %>% 
   summarize(
     n = n(),
     overall = sum(confirmation_page_flag) / sum(home_page_flag),
@@ -99,6 +101,8 @@ funnel %>%
     payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
   )
 ```
+
+The overall conversion rate is only 0.5%. The biggest drop off occurs from payment to confirmation - only 7% make through.
 
 ```{r}
 funnel %>% 
@@ -110,11 +114,13 @@ funnel %>%
     search_payment = sum(payment_page_flag) / sum(search_page_flag),
     payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
   ) %>% 
-  pivot_longer(overall:payment_confirmation, names_to = "rate", values_to = "val") %>% 
-  ggplot(aes(date, val)) +
-  geom_line(aes(color = rate))
+  pivot_longer(overall:payment_confirmation, names_to = "funnel", values_to = "conversion") %>% 
+  ggplot(aes(date, conversion)) +
+  geom_line(aes(color = funnel))
 ```
-There is an obvious drop in funnel conversion starting from March.
+
+There is an obvious drop in conversion from home to search and from search to payment starting from March. Let's do a deeper dive.
+
 ```{r}
 funnel %>% 
   group_by(date, device, sex) %>% 
@@ -125,13 +131,13 @@ funnel %>%
     search_payment = sum(payment_page_flag) / sum(search_page_flag),
     payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
   ) %>% 
-  pivot_longer(overall:payment_confirmation, names_to = "rate", values_to = "val") %>% 
-  ggplot(aes(date, val)) +
-  geom_line(aes(color = rate)) +
+  pivot_longer(overall:payment_confirmation, names_to = "funnel", values_to = "conversion") %>% 
+  ggplot(aes(date, conversion)) +
+  geom_line(aes(color = funnel)) +
   facet_grid(sex ~ device)
 ```
 
-The search page on mobile starts to have some problems since March while the payment page on web starts to experience some issues since March. Gender doesn't seem to matter much.
+Since March, the search page on mobile and the payment page on web start to have some problems. Gender doesn't seem to matter much for conversion.
 
 ```{r}
 funnel %>% 
@@ -145,5 +151,8 @@ funnel %>%
     payment_confirmation = sum(confirmation_page_flag) / sum(payment_page_flag)
   )
 ```
-Before the problem occurs, the biggest drop off occurs from payment to confirmation, followed by search to payment. They both have big room for improvement. Mobile performs much better than desktop but attracts fewer customers. The difference could be attributed to either (1) different user groups from different marketing strategies (2) different products
+
+Before the problem occurs, the biggest drop off occurs from payment to confirmation, followed by search to payment. They both have big room for improvement. We have a good percentage of customers going from the home page to the search page. Their behavior indicates that they do have some buying intentions. However, most of them bounce after searching. The drop from search to payment means either we have a bad search engine or we just don't have enough good products. The drop from payment to confirmation indicates we probably don't have a good product page to convince the customers to buy (e.g. lack of product reviews) or the payment system is hard to use.
+
+Mobile performs much better than desktop but attracts fewer customers. We need a deep dive to understand why. If it is a marketing problem (i.e. mobile attracts customers with higher intentions to buy), then we should try to find more such customers. If it is a product problem (i.e. mobile experience is better than web), then we need to improve the web version.
 
